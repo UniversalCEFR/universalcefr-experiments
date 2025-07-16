@@ -1,6 +1,6 @@
 ### Prompting LLMs for CEFR Level Classification using UniversalCEFR
 
-The code for prompting is fairly simple and can accept command-type args via the terminal.
+The code for prompting is fairly simple and can accept command-type args via the terminal. To access the `universalcefr_test` data, please make sure you join the UniversalCEFR Huggingface Org: https://huggingface.co/UniversalCEFR
 
 For example, the code below uses Gemma7b (English) using language-specific reading comprehension prompts:
 
