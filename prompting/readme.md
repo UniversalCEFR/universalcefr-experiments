@@ -2,7 +2,7 @@
 
 The code for prompting is fairly simple and can accept command-type args via the terminal. To access the `universalcefr_test` data, please make sure you join the UniversalCEFR Huggingface Org: https://huggingface.co/UniversalCEFR
 
-For example, the code below uses Gemma7b (English) using language-specific reading comprehension prompts:
+The code below uses Gemma7b (English) using language-specific reading comprehension prompts:
 
 `python script.py --prompt_template prompt_files/lang_read/prompt_with_specs.txt --dataset_id UniversalCEFR/universalcefr_test --lang_prompts --model_id google/gemma-7b-it`
 
