@@ -1,0 +1,11 @@
+# Public-release dependencies. This is not the original experiment lockfile.
+spacy==3.8.13
+stanza==1.11.1
+spacy-stanza==1.0.4
+pandas>=2.2,<4
+numpy>=1.26,<3
+torch>=2.2,<3
+spacy-udpipe==1.0.0
+pyphen==0.17.2
+# The multilingual fork is required. The Facebook package has a different API.
+tseval @ git+https://github.com/rstodden/text-simplification-evaluation.git@12acc7b547cd4525218f742091b88b3fb21480bc

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "example-en-sentence",
+    "text": "The students read a book in the library.",
+    "lang": "en",
+    "format": "sentence-level"
+  },
+  {
+    "id": "example-en-paragraph",
+    "text": "The library opens early. Students can borrow books and study together.",
+    "lang": "en",
+    "format": "paragraph-level"
+  }
+]
