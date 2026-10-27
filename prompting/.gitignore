@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+outputs/
+.venv*/
+predictions.csv
+predictions.csv.metrics.json
+prompts.jsonl

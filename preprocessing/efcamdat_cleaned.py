@@ -1,38 +1,35 @@
-import pandas as pd
-import json
+"""Convert a cleaned EFCAMDAT Excel worksheet to UniversalCEFR JSON."""
 
-# Paths to the input Excel file and output JSON file
-input_xlsx_path = 'database.xlsx'
-output_json_path = 'efcamdat-cleaned.json'
+if __package__:
+    from .common import build_parser, clean_cell, make_record, read_table, run_conversion
+else:
+    from common import build_parser, clean_cell, make_record, read_table, run_conversion
 
-# Read the Excel file
-df = pd.read_excel(input_xlsx_path)
 
-# Select only the "cefr" and "text_corrected" columns
-filtered_df = df[['cefr', 'text_corrected']]
+COLUMNS = ("cefr", "text_corrected")
 
-# Transform the DataFrame into the desired JSON format
-transformed_data = []
 
-for _, row in filtered_df.iterrows():
-    cefr_level = row['cefr'] if pd.notna(row['cefr']) else 'Unknown'  # Default to 'Unknown' if missing
-    text_content = row['text_corrected'] if pd.notna(row['text_corrected']) else ''  # Default to empty string if missing
+def transform_row(row):
+    return make_record(
+        title="na", lang="en", source_name="efcamdat-cleaned",
+        text_format="paragraph-level", category="learner",
+        cefr_level=clean_cell(row["cefr"], default="Unknown"),
+        license_label="Cambridge", text=clean_cell(row["text_corrected"]),
+    )
 
-    transformed_entry = {
-        "title": "na",  # Assuming 'na' as per your example
-        "lang": "en",  # Assuming English language
-        "source_name": "efcamdat-cleaned",
-        "format": "paragraph-level",  # Assuming paragraph-level format
-        "category": "learner",
-        "cefr_level": str(cefr_level.strip()),
-        "license": "Cambridge",
-        "text": str(text_content.strip())
-    }
 
-    transformed_data.append(transformed_entry)
+def convert_file(input_path, *, sheet_name=0):
+    rows = read_table(input_path, COLUMNS, excel=True, sheet_name=sheet_name)
+    return [transform_row(row) for row in rows]
 
-# Write the transformed data to the output JSON file
-with open(output_json_path, 'w', encoding='utf-8') as jsonfile:
-    json.dump(transformed_data, jsonfile, indent=4, ensure_ascii=False)
 
-print(f'Transformed data has been written to {output_json_path}')
+def main(argv=None):
+    parser = build_parser(__doc__, input_help="cleaned EFCAMDAT .xlsx workbook")
+    parser.add_argument("--sheet", default=None, help="worksheet name (default: first worksheet)")
+    args = parser.parse_args(argv)
+    return run_conversion(parser, args, convert_file,
+                          sheet_name=0 if args.sheet is None else args.sheet)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

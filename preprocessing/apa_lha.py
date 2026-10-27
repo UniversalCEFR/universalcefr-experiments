@@ -1,55 +1,59 @@
-import os
-import json
+"""Convert a directory of APA-LHA .simpde files to UniversalCEFR JSON."""
 
-# Path to the folder containing the .txt files
-txt_folder_path = 'A2-OR'
+from pathlib import Path
 
-# Function to extract the text content from the .txt file
+if __package__:
+    from .common import build_parser, check_output, make_record, run_conversion
+else:
+    from common import build_parser, check_output, make_record, run_conversion
+
+
 def extract_text_from_file(txt_file):
+    """Read the entire text, retaining the original Latin-1 fallback."""
+    path = Path(txt_file)
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            with path.open(encoding=encoding) as stream:
+                lines = stream.readlines()
+            return "".join(lines).strip(), lines
+        except UnicodeDecodeError:
+            if encoding == "latin-1":
+                raise
+
+
+def convert_directory(input_path, *, cefr_level="A2"):
+    """Convert matching files in filename order, without traversing subfolders."""
+    directory = Path(input_path)
+    if not directory.is_dir():
+        raise ValueError(f"input must be a directory: {directory}")
+    paths = sorted(path for path in directory.iterdir()
+                   if path.is_file() and path.suffix == ".simpde")
+    if not paths:
+        raise ValueError(f"no .simpde files found in {directory}")
+    records = []
+    for path in paths:
+        text, _ = extract_text_from_file(path)
+        records.append(make_record(
+            title=path.name, lang="de", source_name="apa-lha",
+            text_format="document-level", category="reference",
+            cefr_level=cefr_level, license_label="Unknown", text=text,
+        ))
+    return records
+
+
+def main(argv=None):
+    parser = build_parser(__doc__, input_help="directory containing .simpde files")
+    parser.add_argument("--cefr-level", default="A2",
+                        choices=("A1", "A1+", "A2", "A2+", "B1", "B1+",
+                                 "B2", "B2+", "C1", "C1+", "C2", "C2+"),
+                        help="label applied to every file in this directory (default: A2)")
+    args = parser.parse_args(argv)
     try:
-        with open(txt_file, 'r', encoding='utf-8') as file:
-            lines = file.readlines()
-        # Return the entire content including the first line
-        content = ''.join(lines).strip()
-        return content, lines  # Return content and lines for length check
-    except UnicodeDecodeError:
-        # If UTF-8 fails, try a different encoding (e.g., latin-1)
-        with open(txt_file, 'r', encoding='latin-1') as file:
-            lines = file.readlines()
-        # Return the entire content including the first line
-        content = ''.join(lines).strip()
-        return content, lines
+        check_output(args.output, args.input.glob("*.simpde"), overwrite=args.overwrite)
+    except (OSError, ValueError) as exc:
+        parser.exit(1, f"Error: {exc}\n")
+    return run_conversion(parser, args, convert_directory, cefr_level=args.cefr_level)
 
-# Create a list to hold all the JSON objects
-json_objects = []
 
-# Loop through all .txt files in the folder
-for txt_file in os.listdir(txt_folder_path):
-    if txt_file.endswith('.simpde'): #and 'A2' in txt_file:
-        # Get the full path of the txt file
-        txt_file_path = os.path.join(txt_folder_path, txt_file)
-
-        # Extract the text content and lines from the file
-        text_content, lines = extract_text_from_file(txt_file_path)
-
-        # Create the JSON object
-        json_obj = {
-            "title": str(txt_file),
-            "lang": "de",  #
-            "source_name": "apa-lha",
-            "format": "document-level",
-            "category": "reference",
-            "cefr_level": "A2",  # Assuming A2 for all files, can be adjusted if needed
-            "license": "Unknown",
-            "text": str(text_content)
-        }
-
-        # Add the JSON object to the list
-        json_objects.append(json_obj)
-
-# Output the JSON objects to a file
-output_json_path = 'A2.json'
-with open(output_json_path, 'w', encoding='utf-8') as jsonfile:
-    json.dump(json_objects, jsonfile, indent=4, ensure_ascii=False)
-
-print(f'JSON data has been written to {output_json_path}')
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,56 +1,65 @@
+"""Convert BEA 2019 Write & Improve JSONL or JSON arrays to UniversalCEFR JSON."""
+
 import json
+from pathlib import Path
 
-# Path to the input JSON file
-input_json_path = 'B.dev.json'
-# Path to the output JSON file
-output_json_path = 'B.dev.new.json'
+if __package__:
+    from .common import build_parser, make_record, run_conversion
+else:
+    from common import build_parser, make_record, run_conversion
 
-# List to hold the transformed data
-transformed_data = []
 
-# Read the input JSON file and handle multiple JSON objects
-with open(input_json_path, 'r', encoding='utf-8') as infile:
-    # Read the entire file content
-    content = infile.read().strip()
-
-    # Split the content by newlines to get individual JSON objects
-    entries = content.split('\n')
-
-    # Ensure each entry is valid JSON and add commas between them
-    valid_entries = []
-    for entry in entries:
-        entry = entry.strip()  # Remove any extra spaces
-        if entry:  # Skip empty lines
-            try:
-                # Parse each individual JSON object
-                valid_entries.append(json.loads(entry))
-            except json.JSONDecodeError as e:
-                print(f"Error decoding entry: {e}")
+def read_entries(input_path):
+    """Accept the original line-delimited .json files and ordinary JSON arrays."""
+    content = Path(input_path).read_text(encoding="utf-8-sig").strip()
+    if not content:
+        raise ValueError("input contains no records")
+    if content.startswith("["):
+        entries = json.loads(content)
+    else:
+        entries = []
+        for line_number, line in enumerate(content.splitlines(), 1):
+            if not line.strip():
                 continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"line {line_number}: invalid JSON ({exc.msg})") from exc
+    if not entries:
+        raise ValueError("input contains no records")
+    return entries
 
-# Loop through the loaded data and transform it
-for entry in valid_entries:
-    # Extract the necessary fields
-    cefr_level = entry.get('cefr', 'Unknown')  # Default to 'Unknown' if no CEFR level is provided
-    text_content = entry.get('text', '')
 
-    # Create the new JSON structure
-    transformed_entry = {
-        "title": "na",  # Assuming 'na' as per your example
-        "lang": "en",  # Assuming English language
-        "source_name": "bea2019st-write-improve",
-        "format": "sentence-level",  # Assuming sentence-level format
-        "category": "learner",
-        "cefr_level": cefr_level[:2],
-        "license": "CC BY-SA-NC 4.0",
-        "text": text_content
-    }
+def transform_entry(entry, *, row_number=1):
+    """Preserve the historical first-two-character CEFR mapping and raw text."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"record {row_number}: expected a JSON object")
+    level = entry.get("cefr")
+    if level is None or level == "":
+        level = "Unknown"
+    elif not isinstance(level, str):
+        raise ValueError(f"record {row_number}: cefr must be a string or null")
+    elif level != "Unknown":
+        level = level[:2]
+    text = entry.get("text", "")
+    if not isinstance(text, str):
+        raise ValueError(f"record {row_number}: text must be a string")
+    return make_record(
+        title="na", lang="en", source_name="bea2019st-write-improve",
+        text_format="sentence-level", category="learner", cefr_level=level,
+        license_label="CC BY-SA-NC 4.0", text=text,
+    )
 
-    # Append the transformed entry to the list
-    transformed_data.append(transformed_entry)
 
-# Write the transformed data to the output JSON file
-with open(output_json_path, 'w', encoding='utf-8') as outfile:
-    json.dump(transformed_data, outfile, indent=4, ensure_ascii=False)
+def convert_file(input_path):
+    return [transform_entry(entry, row_number=number)
+            for number, entry in enumerate(read_entries(input_path), 1)]
 
-print(f'Transformed data has been written to {output_json_path}')
+
+def main(argv=None):
+    parser = build_parser(__doc__, input_help="BEA JSONL file or JSON array")
+    return run_conversion(parser, parser.parse_args(argv), convert_file)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

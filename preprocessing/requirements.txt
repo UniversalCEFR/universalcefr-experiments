@@ -1,0 +1,4 @@
+# Needed by the DEPlain CSV and EFCAMDAT Excel converters.
+# APA-LHA, BEA 2019, and JSON merging use the Python standard library.
+pandas>=2.2,<4
+openpyxl>=3.1.5,<4

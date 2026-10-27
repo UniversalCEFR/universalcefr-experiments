@@ -1,0 +1,8 @@
+# Public refactor dependencies; the original experiment had no complete lockfile.
+torch>=2.4,<3
+transformers>=4.50,<5
+datasets>=3,<5
+accelerate>=1,<2
+sentencepiece>=0.2,<0.3
+protobuf>=4,<7
+Pillow>=10,<13

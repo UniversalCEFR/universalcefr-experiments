@@ -1,40 +1,32 @@
-import pandas as pd
-import json
+"""Convert DEPlain-APA simplified sentence CSV rows to UniversalCEFR JSON."""
 
-# Paths to the input Excel file and output JSON file
-input_xlsx_path = 'all.csv'
-output_json_path = 'deplain-apa-simple.json'
+if __package__:
+    from .common import build_parser, clean_cell, make_record, read_table, run_conversion
+else:
+    from common import build_parser, clean_cell, make_record, read_table, run_conversion
 
-# Read the Excel file
-df = pd.read_csv(input_xlsx_path)
 
-# Select only the "cefr" and "text_corrected" columns
-filtered_df = df[['simplification', 'language_level_simple', 'license', 'simple_title']]
+COLUMNS = ("simplification", "language_level_simple", "license", "simple_title")
 
-# Transform the DataFrame into the desired JSON format
-transformed_data = []
 
-for _, row in filtered_df.iterrows():
-    cefr_level = row['language_level_simple'] if pd.notna(row['language_level_simple']) else 'Unknown'  # Default to 'Unknown' if missing
-    text_content = row['simplification'] if pd.notna(row['simplification']) else ''  # Default to empty string if missing
-    license = row['license'] if pd.notna(row['license']) else ''
-    title = row['simple_title'] if pd.notna(row['simple_title']) else ''
+def transform_row(row):
+    return make_record(
+        title=clean_cell(row["simple_title"]), lang="de",
+        source_name="deplain-apa-sent", text_format="sentence-level",
+        category="reference",
+        cefr_level=clean_cell(row["language_level_simple"], default="Unknown", uppercase=True),
+        license_label=clean_cell(row["license"]), text=clean_cell(row["simplification"]),
+    )
 
-    transformed_entry = {
-        "title": str(title.strip()),  # Assuming 'na' as per your example
-        "lang": "de",  # Assuming English language
-        "source_name": "deplain-apa-sent",
-        "format": "sentence-level",  # Assuming paragraph-level format
-        "category": "reference",
-        "cefr_level": str(cefr_level.strip().upper()),
-        "license": str(license.strip()),
-        "text": str(text_content.strip())
-    }
 
-    transformed_data.append(transformed_entry)
+def convert_file(input_path):
+    return [transform_row(row) for row in read_table(input_path, COLUMNS)]
 
-# Write the transformed data to the output JSON file
-with open(output_json_path, 'w', encoding='utf-8') as jsonfile:
-    json.dump(transformed_data, jsonfile, indent=4, ensure_ascii=False)
 
-print(f'Transformed data has been written to {output_json_path}')
+def main(argv=None):
+    parser = build_parser(__doc__, input_help="DEPlain-APA simplified-sentence CSV")
+    return run_conversion(parser, parser.parse_args(argv), convert_file)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

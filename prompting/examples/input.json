@@ -1,0 +1,14 @@
+[
+  {
+    "text": "The library opens at nine.",
+    "lang": "en",
+    "format": "sentence-level",
+    "cefr_level": "A2"
+  },
+  {
+    "text": "Die Bibliothek ist heute geöffnet.",
+    "lang": "de",
+    "format": "sentence-level",
+    "cefr_level": "B1"
+  }
+]

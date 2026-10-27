@@ -1,234 +1,121 @@
-#!/usr/bin/env python
+"""Command-line entry point for CEFR descriptor prompting."""
 
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3" # CHANGE THIS BASED ON YOUR AVAILABLE GPUs
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+from __future__ import annotations
 
 import argparse
-import csv
-import torch
-from datasets import load_dataset
-from transformers import (
-    AutoTokenizer,
-    AutoProcessor,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    Gemma3ForConditionalGeneration
-)
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from huggingface_hub import login
-login(token = "") # INSERT HUGGINGFACE ACCESS TOKENS
+import json
+from pathlib import Path
+import sys
 
-torch.cuda.empty_cache()
+# Keep `python prompting/script.py` and `python -m prompting` usable.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="CEFR classification with LLMs.")
-    parser.add_argument("--prompt_template", type=str, required=True,
-                        help="Path to the prompt template .txt file.")
-    parser.add_argument("--dataset_id", type=str, required=True,
-                        help="Hugging Face dataset ID or local path.")
-    parser.add_argument("--model_id", type=str, required=True,
-                        help="Hugging Face model ID.")
-    parser.add_argument("--lang_prompts", action="store_true", help="Use language specific prompts.")
-    args = parser.parse_args()
-
-    # Load dataset
-    dataset = load_dataset(args.dataset_id, split="train")
-
-    # Load model and tokenizer/processor
-    device = torch.device("cuda")
-    print("CUDA device count:", torch.cuda.device_count())
-    print("Model:", args.model_id)
-
-    model_type = None
-    tokenizer = None
-    processor = None
-
-    if "gemma-3-12b-it" in args.model_id:
-        config = AutoConfig.from_pretrained(args.model_id)
-        model = Gemma3ForConditionalGeneration.from_pretrained(
-            args.model_id, config=config, torch_dtype=torch.bfloat16, device_map="auto")
-        processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
-        processor.tokenizer.padding_side = "left"
-        model_type = "gemma3"
-
-    elif "EuroLLM-9B-Instruct" in args.model_id or "gemma-7b-it" in args.model_id:
-        config = AutoConfig.from_pretrained(args.model_id)
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_id, config=config, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True)
-        tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-        model_type = "llama"
-
-    elif "aya-101" in args.model_id:
-        model = AutoModelForSeq2SeqLM.from_pretrained(args.model_id, trust_remote_code=True, device_map="auto")
-        tokenizer = AutoTokenizer.from_pretrained(args.model_id, trust_remote_code=True)
-        tokenizer.padding_side = "left"
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.bos_token if tokenizer.bos_token is not None else tokenizer.eos_token
-        model_type = "aya-101"
-
-    elif "Llama-3.1-8B" in args.model_id or "bloomz" in args.model_id:
-        model = AutoModelForCausalLM.from_pretrained(args.model_id, torch_dtype=torch.bfloat16, device_map="auto")
-        tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-        model_type = "llama3"
-
-    else:
-        raise ValueError(f"Model {args.model_id} is not supported in this script.")
-
-    recognized_labels = ["A1", "A2", "B1", "B2", "C1", "C2"]
-    predictions = []
-    gold_labels = []
-
-    # Generate predictions
-    counter = 0
-    print("Model Type:", model_type)
-    for sample in dataset:
-        if ("+" in sample["cefr_level"]) and ("1" not in sample["cefr_level"] or "2" not in sample["cefr_level"]):
-            print(f"Skipping entry {counter} due to '+' in cefr_level")
-            continue
-
-        text = sample["text"]
-        gold_label = sample["cefr_level"]
-        lang = sample["lang"]
-
-        # Use language-specific CEFR descriptors if True, else use English
-        if args.lang_prompts:
-            prompt_template_file = args.prompt_template
-            lang_prompt_file = prompt_template_file.replace('.txt','')
-            lang_prompt_file = lang_prompt_file+'_'+lang+'.txt'
-            print("Using language-specific CEFR descriptors: ", lang)
-            with open(lang_prompt_file, "r", encoding="utf-8") as f:
-                prompt_template = f.read()
-        else:
-            print("Using default English CEFR descriptors")
-            with open(args.prompt_template, "r", encoding="utf-8") as f:
-                prompt_template = f.read()
-
-        user_prompt = prompt_template.replace("<<TEXT>>", text)
-
-        if model_type == "gemma3":
-            messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "You are a helpful assistant for CEFR classification."}],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": user_prompt}],
-            }]
-            inputs = processor.apply_chat_template(messages, padding="longest", pad_to_multiple_of=8, add_generation_prompt=True, tokenize=True,return_dict=True, return_tensors="pt").to(device)
-            inputs = {k: v.contiguous().to(device) for k, v in inputs.items()}
-            input_len = inputs["input_ids"].shape[-1]
-
-            with torch.inference_mode():
-                generation = model.generate(**inputs, max_new_tokens=10, do_sample=False)
-                generation = generation[0][input_len:]
-                decoded_output = processor.decode(generation, skip_special_tokens=True)
+from prompting.data import (check_destination, load_records, prepare_samples,
+                            save_predictions, save_preview, write_json)
+from prompting.scoring import extract_label, compute_metrics
 
 
-        elif model_type == "llama3" and "Llama" in args.model_id:
-            messages = [
-            {
-                "role": "system", 
-                "content": "You are a helpful assistant for CEFR classification."
-            },
+def positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
 
-            {
-                "role": "user",
-                "content": user_prompt
-            }]
-            input_ids = tokenizer.apply_chat_template(messages,add_generation_prompt=True,return_tensors="pt").to(device)
-            terminators = [tokenizer.eos_token_id,tokenizer.convert_tokens_to_ids("<|eot_id|>")]
 
-            with torch.inference_mode():
-                generation = model.generate(input_ids, eos_token_id=terminators, max_new_tokens=10, do_sample=False)
-                response = generation[0][input_ids.shape[-1]:]
-                decoded_output = tokenizer.decode(response, skip_special_tokens=True)
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", type=Path, help="local JSON, JSONL, or CSV records")
+    source.add_argument("--dataset-id", "--dataset_id", help="Hugging Face dataset ID")
+    parser.add_argument("--split", default="train", help="dataset split (original default: train)")
+    parser.add_argument("--dataset-revision", help="Hugging Face dataset commit or revision")
+    parser.add_argument("--prompt-template", "--prompt_template", required=True, type=Path)
+    parser.add_argument("--lang-prompts", "--lang_prompts", action="store_true",
+                        help="use <template stem>_<lang>.txt for each selected record")
+    parser.add_argument("--model-id", "--model_id", help="supported model ID or local model path")
+    parser.add_argument("--model-family", choices=("gemma3", "eurollm", "gemma", "aya", "llama", "bloomz"),
+                        help="override model-family detection, useful for local paths")
+    parser.add_argument("--revision", help="model/tokenizer commit or revision")
+    parser.add_argument("--cache-dir", type=Path, help="Hugging Face cache directory")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto",
+                        help="auto retains bfloat16 on CUDA and uses float32 on CPU")
+    parser.add_argument("--trust-remote-code", action="store_true",
+                        help="allow custom model/tokenizer code from the chosen repository")
+    parser.add_argument("--local-files-only", action="store_true",
+                        help="use cached model and dataset resources without network access")
+    parser.add_argument("--seed", type=int, help="optional random seed; the original run had no fixed seed")
+    parser.add_argument("--limit", type=positive_int, help="maximum selected records after excluding plus levels")
+    parser.add_argument("--dry-run", action="store_true", help="write rendered prompts without loading a model")
+    parser.add_argument("--output", type=Path, help="default: predictions.csv or prompts.jsonl in dry-run mode")
+    parser.add_argument("--overwrite", action="store_true")
+    return parser
 
-        elif model_type == "llama" and "EuroLLM-9B-Instruct" in args.model_id:
-            messages = [
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant for CEFR classification.",
-                },
-                {
-                    "role": "user", "content": user_prompt
-                }]
 
-            inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt")
-            input_length = inputs.shape[-1]
-            outputs = model.generate(inputs, max_new_tokens=10)
-            generated_tokens = outputs[0][input_length:]
-            decoded_output = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            decoded_output = decoded_output.strip()
+def run(args, predictor=None):
+    """Validate inputs, build prompts, predict, and keep each result with its source."""
+    output = args.output or Path("prompts.jsonl" if args.dry_run else "predictions.csv")
+    metric_path = Path(str(output) + ".metrics.json")
+    destinations = [output] if args.dry_run else [output, metric_path]
+    source_path = args.input
+    if source_path is None and args.dataset_id and Path(args.dataset_id).is_file():
+        source_path = Path(args.dataset_id)
+    for path in destinations:
+        check_destination(path, overwrite=args.overwrite)
+        if source_path is not None and path.resolve() == source_path.resolve():
+            raise ValueError("input and output paths must differ")
+        if path.resolve() == args.prompt_template.resolve():
+            raise ValueError("output must not replace the prompt template")
+    if not args.dry_run and not args.model_id and predictor is None:
+        raise ValueError("--model-id is required unless --dry-run is used")
+    records = load_records(args.input, args.dataset_id, split=args.split,
+                           revision=args.dataset_revision, cache_dir=args.cache_dir,
+                           local_files_only=args.local_files_only)
+    samples, skipped = prepare_samples(records, args.prompt_template,
+                                       language_specific=args.lang_prompts, limit=args.limit)
+    for sample in samples:
+        if any(path.resolve() == sample.template_path.resolve() for path in destinations):
+            raise ValueError("output must not replace a selected prompt template")
+    if args.dry_run:
+        save_preview(samples, output, overwrite=args.overwrite)
+        print(f"Saved {len(samples)} prompts to {output}; skipped {skipped} plus-level records.")
+        return None
+    if predictor is None:
+        from prompting.models import load_predictor
 
-        elif "aya-101" in args.model_id:
-            print("Here")
-            inputs = tokenizer(user_prompt, return_tensors="pt", padding=True, truncation=True, max_length=128).to('cuda')
-            input_size = inputs["input_ids"].shape[1]
-            outputs = model.generate(**inputs, do_sample=True, min_length=1, max_length=100)
-            decoded_output = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        predictor = load_predictor(args)
+    results = []
+    for sample in samples:
+        try:
+            response = predictor(sample.prompt)
+            prediction = extract_label(response)
+        except Exception as exc:
+            detail = str(exc) or type(exc).__name__
+            raise RuntimeError(f"record {sample.source_record}: generation failed: {detail}") from exc
+        # Pair retained records directly with predictions after exclusions.
+        results.append({"text": sample.record["text"], "lang": sample.record["lang"],
+                        "format": sample.record["format"], "gold_label": sample.record["cefr_level"],
+                        "prediction": prediction})
+        print(f"Processed {len(results)}/{len(samples)} records", file=sys.stderr)
+    metrics = compute_metrics(results)
+    metrics.update(skipped_plus_levels=skipped, model_id=args.model_id,
+                   model_revision=args.revision, dataset_revision=args.dataset_revision, seed=args.seed)
+    save_predictions(results, output, overwrite=args.overwrite)
+    write_json(metrics, metric_path, overwrite=args.overwrite)
+    print(json.dumps(metrics, indent=2, allow_nan=False))
+    return results
 
-        elif "bloomz" in args.model_id:
-            inputs = tokenizer(user_prompt, return_tensors="pt")
-            input_ids = inputs["input_ids"].to("cuda")
-            attention_mask = inputs["attention_mask"].to("cuda")
 
-            outputs = model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=128)
-            generated_tokens = outputs[0][input_ids.shape[-1]:]  # slice off the prompt
-            decoded_output = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        run(args)
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        parser.exit(1, f"Error: {exc}\n")
+    return 0
 
-        else:
-            input_ids = tokenizer(user_prompt, return_tensors="pt").to("cuda")
-            outputs = model.generate(**input_ids, max_new_tokens=10)
-            generated_tokens = outputs[0][input_ids['input_ids'].shape[-1]:]
-            decoded_output = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            decoded_output = decoded_output.strip()
-
-        print(decoded_output)
-
-        predicted_label = "UNKNOWN"
-        for label in recognized_labels:
-            if label in decoded_output:
-                predicted_label = label
-                break
-
-        predictions.append(predicted_label)
-        gold_labels.append(gold_label)
-        counter += 1
-        print(counter)
-
-        torch.cuda.empty_cache()
-
-    # Save predictions
-    with open("predictions.csv", "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["text", "lang", "format", "gold_label", "prediction"])
-        for sample, pred in zip(dataset, predictions):
-            writer.writerow([sample["text"], sample["lang"], sample["format"], sample["cefr_level"], pred])
-
-    # Compute metrics
-    valid_indices = [i for i, p in enumerate(predictions) if p != "UNKNOWN"]
-    filtered_preds = [predictions[i] for i in valid_indices]
-    filtered_gold = [gold_labels[i] for i in valid_indices]
-
-    accuracy = accuracy_score(filtered_gold, filtered_preds)
-    precision = precision_score(filtered_gold, filtered_preds, average="macro", labels=recognized_labels)
-    recall = recall_score(filtered_gold, filtered_preds, average="macro", labels=recognized_labels)
-    f1 = f1_score(filtered_gold, filtered_preds, average="macro", labels=recognized_labels)
-
-    print("Accuracy:", accuracy)
-    print("Precision (macro):", precision)
-    print("Recall (macro):", recall)
-    print("F1 (macro):", f1)
 
 if __name__ == "__main__":
-    main()
-
-    # Sample command using language-specific writing prompts
-    # python script.py --prompt_template prompt_files/lang_write/prompt_with_specs.txt --lang_prompts --dataset_id UniversalCEFR/universalcefr_test --model_id google/gemma-7b-it
-
-    # Sample command using English writing prompts
-    # python script.py --prompt_template prompt_files/lang_write/prompt_with_specs_en.txt --dataset_id UniversalCEFR/universalcefr_test --model_id google/gemma-7b-it
+    raise SystemExit(main())
